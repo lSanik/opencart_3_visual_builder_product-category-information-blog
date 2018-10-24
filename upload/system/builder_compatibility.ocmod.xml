@@ -286,6 +286,8 @@
 
         $builder = $this->entityName();
         $this->load->model( 'setting/module' );
+        
+        $this->cache->delete( $builder['builder_name'] );
 
         $id = $this->model_setting_module->getBuilderIdByName($builder['builder_name']);
         $post_content = $this->request->post['builder'];
