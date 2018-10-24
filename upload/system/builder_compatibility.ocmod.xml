@@ -1,0 +1,844 @@
+<?xml version="1.0" encoding="utf-8"?>
+<modification>
+    <name>PavBuilder for product/information/category/blog</name>
+    <code>pav_builder_compatibility</code>
+    <version>0.1</version>
+    <author>lSanik1991@gmail.com</author>
+    <description>
+        Like wordpress visual composer, but in opencart ;)
+    </description>
+
+
+    <!-- ADMIN PLACE!!! -->
+    <!-- Layout fix (Don't show product/information/category/blog in layouts) -->
+    <file path="admin/controller/design/layout.php">
+        <operation>
+            <search><![CDATA[foreach ($modules as $module) {]]></search>
+            <add position="after"><![CDATA[
+
+            	if(stristr($module['name'],'build_') !== false){
+			        continue;
+                }
+
+            ]]></add>
+        </operation>
+    </file>
+
+    <!-- Add model. There only one function for model and i place it on setting/module =) -->
+    <file path="admin/model/setting/module.php">
+        <operation>
+            <search><![CDATA[public function addModule($code, $data) {]]></search>
+            <add position="before"><![CDATA[
+
+    public function getBuilderIdByName($name){
+        $result = $this->db->query("SELECT module_id from ".DB_PREFIX."module WHERE  name = '".$this->db->escape($name)."'")->row;
+        if(!isset($result["module_id"])){
+            $result["module_id"] = false;
+        }
+        return $result["module_id"];
+    }
+
+            ]]></add>
+        </operation>
+    </file>
+
+    <!-- Add changes in pavobulder Admin controller file -->
+    <file path="admin/controller/extension/module/pavobuilder.php">
+        <operation>
+            <search><![CDATA[private function form( $id = 0 ) {]]></search>
+            <add position="before"><![CDATA[
+    //Generate name for entity
+	private function entityName(){
+        $builder_name = false;
+        $supported_types = array(
+            'category','product','information','blog','post'
+        );
+
+        foreach ($supported_types as $supported_type){
+            if(isset($this->request->get[$supported_type.'_id'])){
+                $builder_name = 'build_'.$supported_type.'_id='.(int)$this->request->get[$supported_type.'_id'];
+                break;
+            }
+        }
+
+        if(!$builder_name){
+            return array(
+                'builder_name' => '',
+                'builder_group'=> ''
+            );
+        }
+
+        return array(
+            'builder_name' => $builder_name,
+            'builder_group'=> $supported_type
+            );
+    }
+
+    //Public form get for all pages
+	public function getForm(){
+
+	    $id = 1;
+
+	    $this->load->language( 'extension/module/pavobuilder' );
+        $this->load->model( 'setting/extension' );
+        $this->load->model( 'setting/module' );
+        $this->load->model( 'tool/image' );
+        $this->load->model( 'setting/module' );
+
+        $builder = $this->entityName();
+        $this->data['builder_name'] = $builder['builder_name'];
+        $this->data['builder_group'] = $builder['builder_group'];
+        $id = $this->model_setting_module->getBuilderIdByName($builder['builder_name']);
+
+        // languages
+        $this->load->model( 'localisation/language' );
+        $this->data['google_map_api_key'] = $this->config->get( 'pavothemer_google_map_api_key' );
+        $this->data['i18n'] = json_encode( $this->language->all() );
+        $this->data['languages'] = $this->model_localisation_language->getLanguages();
+        $this->data['layout_id'] = $id;
+        $this->data['elements']	= array();
+        $this->data['groups']	= array();
+
+        $extensions = $this->model_setting_extension->getInstalled( 'module' );
+
+        foreach ( $extensions as $key => $code ) {
+            if ( in_array( $code , array( 'pavobuilder', 'pavoheader' ) ) ) continue;
+            $this->load->language( 'extension/module/' . $code );
+            $modules = $this->model_setting_module->getModulesByCode( $code );
+            if ( $modules ) {
+                $this->data['groups'][] = array(
+                    'name'		=> strip_tags( $this->language->get( 'heading_title' ) ),
+                    'slug'		=> $code
+                );
+
+                foreach ( $modules as $module ) {
+                    unset( $module['setting'] );
+                    $module['type']				= 'module';
+                    $module['icon']				= 'fa fa-opencart';
+                    $module['group']			= strip_tags( $this->language->get( 'heading_title' ) );
+                    $module['group_slug']		= $code;
+                    // $module['settings']			= $module['setting'];
+                    $this->data['elements'][] 	= $module;
+                }
+            }
+        }
+
+        $file = DIR_APPLICATION.'/controller/extension/module/pavothemer/helper/theme.php';
+        if ( ! class_exists( 'PavoThemerHelper' ) && file_exists( $file ) ) {
+            require $file;
+        }
+
+        // theme helper
+        $theme = $this->config->get( 'config_theme' );
+        $themeHelper = PavoThemerHelper::instance( $theme );
+
+        /**
+         * 'pavobuilder_animate_effects_groups' animate groups cache key
+         */
+        $this->cache->delete( 'pavobuilder_animate_effects_groups' );
+        $this->data['animate_groups'] = $this->cache->get( 'pavobuilder_animate_effects_groups' );
+
+        if ( ! $this->data['animate_groups'] ) {
+            $apiFile = DIR_APPLICATION.'/controller/extension/module/pavothemer/helper/api.php';
+            if ( ! class_exists( 'PavothemerApiHelper' ) && file_exists( $apiFile ) ) {
+                require_once $apiFile;
+                $apiEndpoint = 'http://raw.githubusercontent.com/daneden/animate.css/master/animate-config.json';
+                $res = PavothemerApiHelper::get( $apiEndpoint );
+                if ( ! empty( $res['response'] ) && ! empty( $res['response']['code'] ) && $res['response']['code'] === 200 ) {
+                    $body = ! empty( $res['body'] ) ? json_decode( $res['body'], true ) : array();
+                    foreach ( $body as $group => $effects ) {
+                        $group_name = implode( ' ', array_map( 'ucfirst', explode( '_', $group ) ) );
+                        $this->data['animate_groups'][ $group_name ] = array();
+                        foreach ( $effects as $effect => $boolean ) {
+                            $this->data['animate_groups'][ $group_name ][$effect] = ucfirst( $effect );
+                        }
+                    }
+                }
+            }
+            $this->cache->set( 'pavobuilder_animate_effects_groups', $this->data['animate_groups'] );
+        }
+
+        /**
+         * 'pavobuilder_animate_effects' cache key
+         * animates
+         */
+        $this->data['animates']	= $this->cache->get( 'pavobuilder_animate_effects', array() );
+        if ( ! $this->data['animates'] ) {
+            $this->data['animates']	= $themeHelper->getAnimates();
+            $this->cache->set( 'pavobuilder_animate_effects', $this->data['animates'] );
+        }
+
+        // fields
+        $this->data['element_fields'] = array();
+        $this->data['element_mask']  = array();
+        $widgets = $this->pavobuilder->widgets->getWidgets();
+
+        //
+        $ignores = array( 'logo' );
+        foreach ( $widgets as $k => $widget ) {
+            if( isset( $widget['widget'] ) && in_array( $widget['widget'], $ignores ) ) {
+                unset( $widgets[$k] );
+            }
+        }
+
+        $this->data['elements']	= array_merge( $this->data['elements'], $widgets );
+        $this->data['groups'] = array(
+            'opencart'	=> array(
+                'name'	=> $this->language->get( 'text_opencart' ),
+                'groups'=> $this->data['groups']
+            ),
+            'pavo'		=> array(
+                'name'	=> $this->language->get( 'text_widget' ),
+                'groups' => array(
+                    array(
+                        'name'		=> strip_tags( $this->language->get( 'heading_title' ) ),
+                        'slug'		=> 'pa-widgets-list'
+                    )
+                )
+            )
+        );
+
+        $this->data['width_roles'] = array(
+            12	=> $this->language->get( 'entry_12_columns_text' ),
+            11	=> $this->language->get( 'entry_11_columns_text' ),
+            10	=> $this->language->get( 'entry_10_columns_text' ),
+            9	=> $this->language->get( 'entry_9_columns_text' ),
+            8	=> $this->language->get( 'entry_8_columns_text' ),
+            7	=> $this->language->get( 'entry_7_columns_text' ),
+            6	=> $this->language->get( 'entry_6_columns_text' ),
+            5	=> $this->language->get( 'entry_5_columns_text' ),
+            4	=> $this->language->get( 'entry_4_columns_text' ),
+            3	=> $this->language->get( 'entry_3_columns_text' ),
+            2	=> $this->language->get( 'entry_2_columns_text' ),
+            1	=> $this->language->get( 'entry_1_columns_text' )
+        );
+
+        foreach ( $widgets as $key => $widget ) {
+            $widget = $this->pavobuilder->widgets->getWidget( $key );
+            $widgetFields = $widget->fields();
+            $this->data['element_mask'][$key] = ! empty( $widgetFields['mask'] ) ? $widgetFields['mask'] : array();
+            $this->data['element_fields'][$key] = ! empty( $widgetFields[ 'tabs' ] ) ? $widgetFields[ 'tabs' ] : array();
+            $this->data['elements'][$key]['icon'] = $this->data['element_mask'][$key]['icon'];
+            $this->data['elements'][$key]['name'] = $this->data['element_mask'][$key]['label'];
+        }
+
+        $this->data['user_token'] = $this->session->data['user_token'];
+        // layout data
+
+        $layout = $id ? $this->model_setting_module->getModule( $id ) : array();
+        $layout = $layout ? $layout : array();
+        $this->data['placeholder'] = $this->model_tool_image->resize('no_image.png', 100, 100);
+
+        if( isset($layout['preview']) ){
+            $this->data['thumb'] = $this->model_tool_image->resize( $layout['preview'], 100, 100 );
+        }
+
+        // echo '<pre>'.print_r( $layout ,1 ); die;
+        $this->data['layout'] = $layout;
+        if ( empty( $layout['uniqid_id'] ) ) {
+            $this->data['layout']['uniqid_id'] = uniqid();
+        }//echo '<pre>'; print_r($layout['content']); die();
+
+        $this->data['layout']['content'] 		= ! empty( $layout['content'] ) ? $this->validateElementData( $layout['content'] ) : array();
+        $this->data['site_url'] 	= $this->request->server['HTTPS'] ? HTTPS_CATALOG : HTTPS_CATALOG;
+        $this->data['edit_layout_url'] = str_replace( '&amp;', '&', $this->url->link( 'extension/module/pavobuilder/saveModule', 'module_id=' . $id . '&user_token=' . $this->session->data['user_token'], true ) );
+
+        // default image
+        $this->load->model( 'tool/image' );
+        $this->data['no_image'] = $this->model_tool_image->resize('no_image.png', 100, 100);
+        $this->data['theme_default_image_url'] = ( $this->request->server['HTTPS'] ? HTTPS_CATALOG : HTTPS_CATALOG ) . 'catalog/view/theme/default/image/';
+        $this->data['underscore_template'] = $this->load->view( 'extension/module/pavobuilder/_template', $this->data );
+
+        // addScripts
+        $this->document->addScript( 'view/javascript/pavobuilder/dist/pavobuilder_comptability.min.js' );
+        $this->document->addScript( 'view/javascript/jquery/jquery-ui/jquery-ui.min.js' );
+
+        if ( $key = $this->config->get( 'pavothemer_google_map_api_key' ) && $key ) {
+//			$this->document->addScript( '//maps.googleapis.com/maps/api/js?key=' . $this->config->get( 'pavothemer _google_map_api_key' ) . '&libraries=places' );
+        }
+
+        // enqueue scripts, stylesheet needed to display editor
+        $this->document->addScript( 'view/javascript/summernote/summernote.js' );
+        $this->document->addScript( 'view/javascript/summernote/opencart.js' );
+        $this->document->addStyle( 'view/javascript/summernote/summernote.css' );
+
+        // addStyles
+        $this->document->addStyle( 'view/stylesheet/pavobuilder/dist/pavobuilder.min.css' );
+        $this->document->addStyle( 'view/javascript/jquery/jquery-ui/jquery-ui.min.css' );
+
+        $file = '/catalog/view/theme/' . $theme . '/stylesheet/animate.min.css';
+        if ( file_exists( dirname( DIR_APPLICATION ) . $file ) ) {
+            $this->document->addStyle( HTTP_CATALOG . $file );
+        }
+
+        $this->data['errors'] = $this->errors;
+
+        // echo '<pre>'; print_r( $this->data['groups'] );die();
+
+        return array(
+            'template'=>$this->load->view( 'extension/module/pavobuilder/form_tab', $this->data ),
+            'underscore_template'=>$this->data['underscore_template']
+            );
+    }
+
+    //Save for all pages
+    public function saveForm(){
+
+        $builder = $this->entityName();
+        $this->load->model( 'setting/module' );
+
+        $id = $this->model_setting_module->getBuilderIdByName($builder['builder_name']);
+        $post_content = $this->request->post['builder'];
+
+        if(!isset($post_content['group'])){
+            $post_content['group'] = $builder['builder_group'];;
+        }
+
+        if(!isset($post_content['name'])){
+            $post_content['name'] = $builder['builder_name'];
+        }
+
+        $this->load->model( 'setting/extension' );
+        $this->load->model( 'setting/module' );
+        $this->load->language( 'extension/module/pavobuilder' );
+
+        $is_ajax = ! empty( $_SERVER['HTTP_X_REQUESTED_WITH'] ) && strtolower( $_SERVER['HTTP_X_REQUESTED_WITH'] ) == 'xmlhttprequest';
+
+        $content = $is_ajax ? $post_content['content'] : ( ! empty( $post_content['content'] ) ? json_decode( html_entity_decode( $post_content['content'] ), true ) : array() );
+        $post_content['content'] = $content;
+
+        $id = ! $id && ! empty( $this->request->get['module_id'] ) ? $this->request->get['module_id'] : $id;
+
+        if ( ! $id ) {
+            $this->model_setting_module->addModule( 'pavobuilder', $post_content );
+            $id = $this->db->getLastId();
+        } else {
+            $this->model_setting_module->editModule( $id, $post_content );
+        }
+
+        $uniqid_id = ! empty( $post_content['uniqid_id'] ) ? $post_content['uniqid_id'] : 0;
+        // generate css for layout
+
+        $saved = $this->pavobuilder->css->save( $uniqid_id, $content );
+
+        // var_dump($saved); die();
+        $this->cleanUp();
+        // ajax save
+
+        return true;
+
+    }
+
+    //Delete for all pages
+    public function deleteItem($id){
+
+        $this->load->model( 'setting/module' );
+        $this->model_setting_module->deleteModule( $id );
+    }
+
+        ]]></add>
+        </operation>
+        <operation>
+            <search><![CDATA[dirname( __FILE__ ) . '/pavothemer]]></search>
+            <add position="replace"><![CDATA[DIR_APPLICATION.'/controller/extension/module/pavothemer]]></add>
+        </operation>
+    </file>
+
+    <!-- Admin Category -->
+    <file path="admin/controller/catalog/category.php">
+        <!-- Edit save -->
+        <operation>
+            <search><![CDATA[$this->model_catalog_category->editCategory($this->request->get['category_id'], $this->request->post);]]></search>
+            <add position="after"><![CDATA[
+
+//builder_add save function
+            $builder = $this->load->controller('extension/module/pavobuilder/saveForm');
+
+            ]]></add>
+        </operation>
+        <!-- Delete -->
+        <operation>
+            <search><![CDATA[foreach ($this->request->post['selected'] as $category_id) {]]></search>
+            <add position="before"><![CDATA[
+
+//Builder delete
+                $this->load->model( 'setting/module' );
+
+            ]]></add>
+        </operation>
+
+        <operation>
+            <search><![CDATA[foreach ($this->request->post['selected'] as $category_id) {]]></search>
+            <add position="after"><![CDATA[
+
+//Builder delete
+                $builder_id =
+                    $this->model_setting_module
+                        ->getBuilderIdByName('build_category_id='.$category_id);
+                $this->load->controller('extension/module/pavobuilder/deleteItem',$builder_id);
+
+            ]]></add>
+        </operation>
+
+        <!-- Controller Render -->
+        <operation>
+            <search><![CDATA[$this->load->model('design/layout');]]></search>
+            <add position="after"><![CDATA[
+//Builder template load
+        $builder = $this->load->controller('extension/module/pavobuilder/getForm');
+		$data['tab_builder'] = $builder['template'];
+        $data['underscore_template'] = $builder['underscore_template'];
+
+            ]]></add>
+        </operation>
+    </file>
+    <file path="admin/view/template/catalog/category_form.twig">
+        <operation>
+            <search><![CDATA[<li class="active"><a href="#tab-general" data-toggle="tab">{{ tab_general }}</a></li>]]></search>
+            <add position="after"><![CDATA[
+{#Builder tab button#}
+            <li><a href="#tab-builder" data-toggle="tab">Editor-Builder</a></li>
+            ]]></add>
+        </operation>
+        <operation>
+            <search><![CDATA[<div class="tab-pane" id="tab-data">]]></search>
+            <add position="before"><![CDATA[
+
+            {#Builder tab data#}
+            <div class="tab-pane" id="tab-builder">
+              {{ tab_builder }}
+            </div>
+
+            ]]></add>
+        </operation>
+        <operation>
+            <search><![CDATA[{{ footer }}]]></search>
+            <add position="before"><![CDATA[
+{#Builder get underscore template#}
+{{ underscore_template }}
+            ]]></add>
+        </operation>
+
+        <operation>
+            <search><![CDATA[class="form-horizontal"]]></search>
+            <add position="replace"><![CDATA[ class="form-horizontal form_bulder_comptability"]]></add>
+        </operation>
+
+    </file>
+
+    <!-- Admin Product -->
+    <file path="admin/controller/catalog/product.php">
+        <!-- Edit save -->
+        <operation>
+            <search><![CDATA[$this->model_catalog_product->editProduct($this->request->get['product_id'], $this->request->post);]]></search>
+            <add position="after"><![CDATA[
+
+//builder_add save function
+            $builder = $this->load->controller('extension/module/pavobuilder/saveForm');
+
+            ]]></add>
+        </operation>
+        <!-- Delete -->
+        <operation>
+            <search><![CDATA[foreach ($this->request->post['selected'] as $product_id) {]]></search>
+            <add position="before"><![CDATA[
+
+//Builder delete
+                $this->load->model( 'setting/module' );
+
+            ]]></add>
+        </operation>
+
+        <operation>
+            <search><![CDATA[foreach ($this->request->post['selected'] as $product_id) {]]></search>
+            <add position="after"><![CDATA[
+
+//Builder delete
+                $builder_id =
+                    $this->model_setting_module
+                        ->getBuilderIdByName('build_product_id='.$product_id);
+                $this->load->controller('extension/module/pavobuilder/deleteItem',$builder_id);
+
+            ]]></add>
+        </operation>
+
+        <!-- Controller Render -->
+        <operation>
+            <search><![CDATA[$this->load->model('design/layout');]]></search>
+            <add position="after"><![CDATA[
+//Builder template load
+        $builder = $this->load->controller('extension/module/pavobuilder/getForm');
+		$data['tab_builder'] = $builder['template'];
+        $data['underscore_template'] = $builder['underscore_template'];
+
+            ]]></add>
+        </operation>
+    </file>
+    <file path="admin/view/template/catalog/product_form.twig">
+        <operation>
+            <search><![CDATA[<li class="active"><a href="#tab-general" data-toggle="tab">{{ tab_general }}</a></li>]]></search>
+            <add position="after"><![CDATA[
+{#Builder tab button#}
+            <li><a href="#tab-builder" data-toggle="tab">Editor-Builder</a></li>
+            ]]></add>
+        </operation>
+        <operation>
+            <search><![CDATA[<div class="tab-pane" id="tab-data">]]></search>
+            <add position="before"><![CDATA[
+
+            {#Builder tab data#}
+            <div class="tab-pane" id="tab-builder">
+              {{ tab_builder }}
+            </div>
+
+            ]]></add>
+        </operation>
+        <operation>
+            <search><![CDATA[{{ footer }}]]></search>
+            <add position="before"><![CDATA[
+{#Builder get underscore template#}
+{{ underscore_template }}
+            ]]></add>
+        </operation>
+
+        <operation>
+            <search><![CDATA[class="form-horizontal"]]></search>
+            <add position="replace"><![CDATA[ class="form-horizontal form_bulder_comptability"]]></add>
+        </operation>
+
+    </file>
+
+    <!-- Admin Information -->
+    <file path="admin/controller/catalog/information.php">
+        <!-- Edit save -->
+        <operation>
+            <search><![CDATA[$this->model_catalog_information->editInformation($this->request->get['information_id'], $this->request->post);]]></search>
+            <add position="after"><![CDATA[
+
+//builder_add save function
+            $builder = $this->load->controller('extension/module/pavobuilder/saveForm');
+
+            ]]></add>
+        </operation>
+        <!-- Delete -->
+        <operation>
+            <search><![CDATA[foreach ($this->request->post['selected'] as $information_id) {]]></search>
+            <add position="before"><![CDATA[
+
+//Builder delete
+                $this->load->model( 'setting/module' );
+
+            ]]></add>
+        </operation>
+
+        <operation>
+            <search><![CDATA[foreach ($this->request->post['selected'] as $information_id) {]]></search>
+            <add position="after"><![CDATA[
+
+//Builder delete
+                $builder_id =
+
+                    $this->model_setting_module
+                        ->getBuilderIdByName('build_information_id='.$information_id);
+                $this->load->controller('extension/module/pavobuilder/deleteItem',$builder_id);
+
+            ]]></add>
+        </operation>
+
+        <!-- Controller Render -->
+        <operation>
+            <search><![CDATA[$this->load->model('design/layout');]]></search>
+            <add position="after"><![CDATA[
+//Builder template load
+        $builder = $this->load->controller('extension/module/pavobuilder/getForm');
+		$data['tab_builder'] = $builder['template'];
+        $data['underscore_template'] = $builder['underscore_template'];
+
+            ]]></add>
+        </operation>
+    </file>
+    <file path="admin/view/template/catalog/information_form.twig">
+        <operation>
+            <search><![CDATA[<li class="active"><a href="#tab-general" data-toggle="tab">{{ tab_general }}</a></li>]]></search>
+            <add position="after"><![CDATA[
+{#Builder tab button#}
+            <li><a href="#tab-builder" data-toggle="tab">Editor-Builder</a></li>
+            ]]></add>
+        </operation>
+        <operation>
+            <search><![CDATA[<div class="tab-pane" id="tab-data">]]></search>
+            <add position="before"><![CDATA[
+
+            {#Builder tab data#}
+            <div class="tab-pane" id="tab-builder">
+              {{ tab_builder }}
+            </div>
+
+            ]]></add>
+        </operation>
+        <operation>
+            <search><![CDATA[{{ footer }}]]></search>
+            <add position="before"><![CDATA[
+{#Builder get underscore template#}
+{{ underscore_template }}
+            ]]></add>
+        </operation>
+
+        <operation>
+            <search><![CDATA[class="form-horizontal"]]></search>
+            <add position="replace"><![CDATA[ class="form-horizontal form_bulder_comptability"]]></add>
+        </operation>
+
+    </file>
+
+    <!-- Admin Blog (PavBlog) -->
+    <file path="admin/controller/extension/module/pavoblog.php">
+        <!-- Edit save -->
+        <operation>
+            <search><![CDATA[$this->model_extension_pavoblog_post->editPost( $post_id, $this->request->post );]]></search>
+            <add position="after"><![CDATA[
+
+//builder_add save function
+            $builder = $this->load->controller('extension/module/pavobuilder/saveForm');
+
+            ]]></add>
+        </operation>
+        <!-- Delete -->
+        <operation>
+            <search><![CDATA[foreach ( $selected as $post_id ) {]]></search>
+            <add position="before"><![CDATA[
+
+//Builder delete
+                $this->load->model( 'setting/module' );
+
+            ]]></add>
+        </operation>
+
+        <operation>
+            <search><![CDATA[foreach ( $selected as $post_id ) {]]></search>
+            <add position="after"><![CDATA[
+
+//Builder delete
+                $builder_id =
+
+                    $this->model_setting_module
+                        ->getBuilderIdByName('build_post_id='.$post_id);
+                $this->load->controller('extension/module/pavobuilder/deleteItem',$builder_id);
+
+            ]]></add>
+        </operation>
+
+        <!-- Controller Render -->
+        <operation>
+            <search><![CDATA[$this->data = array_merge( array(]]></search>
+            <add position="before"><![CDATA[
+//Builder template load
+        $builder = $this->load->controller('extension/module/pavobuilder/getForm');
+		$this->data['tab_builder'] = $builder['template'];
+        $this->data['underscore_template'] = $builder['underscore_template'];
+
+            ]]></add>
+        </operation>
+    </file>
+    <file path="admin/view/template/extension/module/pavoblog/post.twig">
+        <operation>
+            <search><![CDATA[<li class="active"><a href="#tab-general" data-toggle="tab">{{ tab_general }}</a></li>]]></search>
+            <add position="after"><![CDATA[
+{#Builder tab button#}
+            <li><a href="#tab-builder" data-toggle="tab">Editor-Builder</a></li>
+            ]]></add>
+        </operation>
+        <operation>
+            <search><![CDATA[<div class="tab-pane" id="tab-data">]]></search>
+            <add position="before"><![CDATA[
+
+            {#Builder tab data#}
+            <div class="tab-pane" id="tab-builder">
+              {{ tab_builder }}
+            </div>
+
+            ]]></add>
+        </operation>
+        <operation>
+            <search><![CDATA[{{ footer }}]]></search>
+            <add position="before"><![CDATA[
+{#Builder get underscore template#}
+{{ underscore_template }}
+            ]]></add>
+        </operation>
+
+        <operation>
+            <search><![CDATA[class="form-horizontal"]]></search>
+            <add position="replace"><![CDATA[ class="form-horizontal form_bulder_comptability"]]></add>
+        </operation>
+
+    </file>
+
+    <!-- CATALOG PLACE!!! -->
+    C:\Users\Sanik\PhpstormProjects\zukr_oc3\catalog\model\setting\module.php
+    <file path="catalog/model/setting/module.php">
+        <operation>
+            <search><![CDATA[public function getModule($module_id){]]></search>
+            <add position="before"><![CDATA[
+public function getBuild($name){
+        $query = $this->db->query("SELECT * FROM oc_module WHERE name = '".$name."'")->row;
+
+        if(!$query){
+            return '';
+        }
+
+        $build_setting = json_decode($query['setting'],true);
+        $build = '';
+
+        if($build_setting){
+            $build = $this->cleanHtml($this->load->controller('extension/module/pavobuilder', $build_setting));
+        }
+
+        return $build;
+    }
+    public function cleanHtml($str){
+
+        if(isset($_COOKIE['c_dev_mode'])){
+            return $str;
+        }
+
+        $str = str_replace(array("\r\n", "\r", "\n"), ' ',$str);
+        $str = trim(preg_replace('/\s{2,}/', ' ', $str));
+
+        return $str;
+    }
+
+            ]]></add>
+        </operation>
+    </file>
+
+    <!-- Catalog Category -->
+    <file path="catalog/controller/product/category.php">
+        <operation>
+            <search><![CDATA[$this->document->setTitle($category_info['meta_title']);]]></search>
+            <add position="before"><![CDATA[
+		    //Catalog controller builder
+		    $build_name = 'build_category_id='.$category_id;
+            if(!isset($_COOKIE['c_dev_mode'])){
+                $data['build_html'] = $this->cache->get($build_name);
+            }
+            if(!isset($data['build_html']) || !$data['build_html']){
+                $this->load->model('setting/module');
+                $data['build_html'] = $this->model_setting_module->getBuild($build_name);
+                $this->cache->set($build_name,$data['build_html']);
+            }
+            ]]></add>
+        </operation>
+    </file>
+
+    <file path="catalog/view/theme/*/template/product/category.twig">
+        <operation>
+            <search><![CDATA[{{ content_top }}]]></search>
+            <add position="after"><![CDATA[
+                {{ build_html }}
+            ]]></add>
+        </operation>
+    </file>
+
+
+    <!-- Catalog Product -->
+    <file path="catalog/controller/product/product.php">
+        <operation>
+            <search><![CDATA[if ($product_info) {]]></search>
+            <add position="after"><![CDATA[
+		    //Catalog controller builder
+		    $build_name = 'build_product_id='.$product_id;
+            if(!isset($_COOKIE['c_dev_mode'])){
+                $data['build_html'] = $this->cache->get($build_name);
+            }
+            if(!isset($data['build_html']) || !$data['build_html']){
+                $this->load->model('setting/module');
+                $data['build_html'] = $this->model_setting_module->getBuild($build_name);
+                $this->cache->set($build_name,$data['build_html']);
+            }
+            ]]></add>
+        </operation>
+    </file>
+
+    <file path="catalog/view/theme/*/template/product/product.twig">
+        <operation>
+            <search><![CDATA[<p>{{ product.description }}</p>]]></search>
+            <add position="before"><![CDATA[
+                {{ build_html }}
+            ]]></add>
+        </operation>
+    </file>
+
+    <!-- Catalog Information -->
+    <file path="catalog/controller/information/information.php">
+        <operation>
+            <search><![CDATA[if ($information_info) {]]></search>
+            <add position="after"><![CDATA[
+		    //Catalog controller builder
+		    $build_name = 'build_information_id='.$information_id;
+            if(!isset($_COOKIE['c_dev_mode'])){
+                $data['build_html'] = $this->cache->get($build_name);
+            }
+            if(!isset($data['build_html']) || !$data['build_html']){
+                $this->load->model('setting/module');
+                $data['build_html'] = $this->model_setting_module->getBuild($build_name);
+                $this->cache->set($build_name,$data['build_html']);
+            }
+            ]]></add>
+        </operation>
+    </file>
+
+    <file path="catalog/view/theme/*/template/information/information.twig">
+        <operation>
+            <search><![CDATA[{{ content_top }}]]></search>
+            <add position="before"><![CDATA[
+                {{ build_html }}
+            ]]></add>
+        </operation>
+    </file>
+
+    <!-- Catalog Post -->
+
+    <file path="catalog/controller/extension/pavoblog/single.php">
+        <operation>
+            <search><![CDATA[$post = $this->model_extension_pavoblog_post->getPost( $post_id );]]></search>
+            <add position="after"><![CDATA[
+		    //Catalog controller builder
+		    $build_name = 'build_post_id='.$post_id;
+            if(!isset($_COOKIE['c_dev_mode'])){
+                $data['build_html'] = $this->cache->get($build_name);
+            }
+            if(!isset($data['build_html']) || !$data['build_html']){
+                $this->load->model('setting/module');
+                $data['build_html'] = $this->model_setting_module->getBuild($build_name);
+                $this->cache->set($build_name,$data['build_html']);
+            }
+            ]]></add>
+        </operation>
+    </file>
+
+    <file path="catalog/view/theme/*/template/pavoblog/single.twig">
+        <operation>
+            <search><![CDATA[{{ content_top }}]]></search>
+            <add position="before"><![CDATA[
+                {{ build_html }}
+            ]]></add>
+        </operation>
+    </file>
+
+
+    <!-- empty template
+    <file path="admin/controller/extension/module/pavobuilder.php">
+        <operation>
+            <search><![CDATA[dirname( __FILE__ ) . '/pavothemer]]></search>
+            <add position="replace"><![CDATA[
+
+            ]]></add>
+        </operation>
+    </file>
+     -->
+
+
+
+
+</modification>
